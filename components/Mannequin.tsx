@@ -27,6 +27,8 @@ interface MannequinProps {
   ghostOpacity?: number;
   limbTensions?: Record<string, number>;
   pinsAtLimit?: Set<keyof WalkingEnginePivotOffsets>;
+  isInteractive?: boolean;
+  onClick?: () => void;
 }
 
 const RENDER_ORDER: (keyof WalkingEngineProportions)[] = [
@@ -72,7 +74,8 @@ export const Mannequin: React.FC<MannequinProps> = ({
   pose, pivotOffsets, props, showPivots, showLabels, baseUnitH,
   onAnchorMouseDown, onBodyMouseDown, draggingBoneKey, selectedBoneKeys, isPaused,
   maskImage, maskTransform, isGhost = false, overrideProps, onPositionsUpdate, activePins = [],
-  onIKSolveUpdate, ghostType, ghostOpacity = 0.6, limbTensions = {}, pinsAtLimit
+  onIKSolveUpdate, ghostType, ghostOpacity = 0.6, limbTensions = {}, pinsAtLimit,
+  isInteractive = false, onClick
 }) => {
     const activeProps = useMemo(() => {
         return overrideProps ? overrideProps : JSON.parse(JSON.stringify(props));
@@ -171,14 +174,16 @@ export const Mannequin: React.FC<MannequinProps> = ({
             onPositionsUpdate(calculations.transforms);
         }
     }, [calculations.transforms, onPositionsUpdate]);
-
-    const ghostStyles: React.CSSProperties = isGhost 
-        ? { opacity: ghostOpacity, pointerEvents: 'none' }
-        : {};
+    
+    const wrapperStyle: React.CSSProperties = {
+      opacity: isGhost ? ghostOpacity : 1,
+      pointerEvents: isInteractive ? 'auto' : (isGhost ? 'none' : 'auto'),
+      cursor: isInteractive ? 'pointer' : 'default'
+    };
 
 
     return (
-        <g style={ghostStyles}>
+        <g style={wrapperStyle} onClick={onClick}>
             {RENDER_ORDER.map(partKey => {
                 const p = partDefinitions[partKey];
                 const t = calculations.transforms[partKey];

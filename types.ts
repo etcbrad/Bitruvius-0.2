@@ -169,8 +169,12 @@ export type AnimationClip = {
   endPose: WalkingEnginePivotOffsets;
   easing?: 'linear' | 'ease-in' | 'ease-out' | 'elastic';
   pivotEvents?: AnimationPivotEvent[];
-  // Optional: Add initial impulse forces for jumps, etc.
-  // startImpulse?: { force: Vector2D; angular: number; };
+};
+
+export type Keyframe = {
+  id: string;
+  pose: WalkingEnginePivotOffsets;
+  time: number; // Absolute time in milliseconds
 };
 
 export type MotionEnginePose = {

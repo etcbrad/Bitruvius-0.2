@@ -1,5 +1,5 @@
 
-import { PartName, Pose, Vector2D, JointLimits } from './types';
+import { PartName, Pose, Vector2D, JointLimits, WalkingEnginePivotOffsets } from './types';
 
 export const SCALE_FACTOR = 1; // This remains for overall SVG viewport scaling to maintain visual size.
 export const BASE_HEAD_UNIT = 50; // The base unit for the internal anatomy proportions. 'H' from walking engine will substitute this.
@@ -43,6 +43,15 @@ export const RIGGING = {
   SHOULDER_Y_OFFSET_FROM_COLLAR_END: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.COLLAR,
   COLLAR_OFFSET_Y: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.COLLAR * 0.15,
 };
+
+export const JOINT_KEYS: (keyof WalkingEnginePivotOffsets)[] = [
+  'waist', 'torso', 'collar', 'neck',
+  'l_shoulder', 'l_elbow', 'l_hand',
+  'r_shoulder', 'r_elbow', 'r_hand',
+  'l_hip', 'l_knee', 'l_foot', 'l_toe',
+  'r_hip', 'r_knee', 'r_foot', 'r_toe'
+];
+
 
 // The actual Y position for the floor in the mannequin's local coordinate system (before overall translation).
 // This is the sum of leg segments below the hip.

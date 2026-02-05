@@ -1,5 +1,3 @@
-
-
 .timeline-container {
   display: flex;
   flex-direction: column;
@@ -28,11 +26,32 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: background-color 0.2s, opacity 0.2s;
 }
 
-.timeline-button:hover {
+.timeline-button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+
+.timeline-button:not(:disabled):hover {
   background-color: #F3F4F6; /* mono-darker */
+}
+
+.timeline-button.add-keyframe-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: auto;
+    padding: 0 8px;
+    font-weight: bold;
+}
+
+.timeline-button .button-label {
+    font-size: 10px;
+    font-weight: normal;
 }
 
 .timeline-duration {
@@ -50,41 +69,45 @@
   background-color: #E5E7EB; /* ridge */
   padding: 4px;
   border-radius: 2px;
-  overflow-x: auto;
-  min-height: 60px;
+  overflow: hidden;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  cursor: ew-resize;
 }
 
 .timeline-track {
   position: relative;
-  /* width is now set dynamically via style prop */
-  height: 50px;
+  height: 20px;
 }
 
-.timeline-clip {
+.timeline-keyframe {
   position: absolute;
-  height: 100%;
+  top: 50%;
+  transform: translateY(-50%) translateX(-50%) rotate(45deg);
+  width: 12px;
+  height: 12px;
   background-color: #4B5563; /* mono-mid */
-  border: 1px solid #111827; /* ink */
-  border-radius: 3px;
-  color: #FFFFFF; /* paper */
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
+  border: 1px solid #FFFFFF; /* paper */
+  box-shadow: 0 0 3px rgba(0,0,0,0.3);
+  z-index: 5;
   cursor: grab;
-  overflow: hidden;
-  white-space: nowrap;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
-  transition: background-color 0.2s;
+  transition: background-color 0.2s, transform 0.2s, box-shadow 0.2s;
 }
 
-.timeline-clip:hover {
-    background-color: #374151; /* selection-light */
+.timeline-keyframe:active {
+  cursor: grabbing;
 }
 
-.clip-name {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 10px;
-  pointer-events: none; /* Make text non-interactive */
+.timeline-keyframe.selected {
+  background-color: #f59e0b; /* amber-500 */
+  box-shadow: 0 0 8px #f59e0b;
+  transform: translateY(-50%) translateX(-50%) rotate(45deg) scale(1.3);
+}
+
+.timeline-keyframe.locked {
+  cursor: not-allowed;
+  background-color: #111827;
 }
 
 .timeline-playback-head {
@@ -96,4 +119,5 @@
     pointer-events: none;
     z-index: 10;
     box-shadow: 0 0 5px rgba(239, 68, 68, 0.5);
+    transform: translateX(-1px);
 }
