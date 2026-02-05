@@ -183,7 +183,7 @@ export const Bone: React.FC<BoneProps> = ({
   const boneStrokeColor = isGhostly ? "none" : COLORS.RIDGE;
   const boneStrokeWidth = isGhostly ? 0 : 0.5;
   const boneStrokeDasharray = "none";
-  let pathClassName = `${bodyCursorStyle}`;
+  let pathClassName = ``;
   if (isGhostly && isUnderTension) {
       pathClassName += ' animate-pulse-red';
   }
@@ -204,14 +204,16 @@ export const Bone: React.FC<BoneProps> = ({
     <g transform={transform} className={colorClass} style={boneWrapperStyle}>
       {visible && (
         <React.Fragment>
+          {/* --- Interaction Layer --- */}
+          {/* This path is invisible but has a wide stroke to increase the clickable area */}
           <path
             d={getBonePath(length, width, variant, drawsUpwards)}
-            fill={boneFill}
-            stroke={boneStrokeColor}
-            strokeWidth={boneStrokeWidth}
-            strokeDasharray={boneStrokeDasharray}
-            paintOrder="stroke"
-            className={pathClassName}
+            fill="transparent"
+            stroke="transparent"
+            strokeWidth={Math.max(25, width * 1.2)} 
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            className={bodyCursorStyle}
             onMouseDown={(e) => {
                 if (isPausedAndPivotsVisible && onBodyMouseDown && boneKey) {
                     onBodyMouseDown(boneKey, e.clientX, e);
@@ -223,9 +225,20 @@ export const Bone: React.FC<BoneProps> = ({
                 }
             }}
           />
+
+          {/* --- Visual Layer --- */}
+          <path
+            d={getBonePath(length, width, variant, drawsUpwards)}
+            fill={boneFill}
+            stroke={boneStrokeColor}
+            strokeWidth={boneStrokeWidth}
+            strokeDasharray={boneStrokeDasharray}
+            paintOrder="stroke"
+            className={`${pathClassName} pointer-events-none`}
+          />
           {/* Overlay line for axis */}
           {showPivots && !isGhostly && (
-            <line x1="0" y1="0" x2="0" y2={visualEndPoint} stroke="rgba(150, 150, 150, 0.15)" strokeWidth="1" opacity={0.5} strokeLinecap="round" />
+            <line x1="0" y1="0" x2="0" y2={visualEndPoint} stroke="rgba(150, 150, 150, 0.15)" strokeWidth="1" opacity={0.5} strokeLinecap="round" className="pointer-events-none" />
           )}
            {showLabel && label && (
             <text x={width / 2 + 5} y={visualEndPoint / 2} 
@@ -242,15 +255,14 @@ export const Bone: React.FC<BoneProps> = ({
       {/* Anchor (red dot) at the start of the bone, always visible if showPivots */}
       {showPivots && !isGhostly && visible && boneKey && onAnchorMouseDown && (
         <g>
+          {/* Visuals */}
           <circle 
             cx="0" cy="0" r={anchorRadius} 
             fill={anchorFillColor} 
             stroke="white"
             strokeWidth="1"
-            className={`drop-shadow-md ${anchorCursorStyle}`} 
+            className="drop-shadow-md pointer-events-none" 
             data-no-export="true"
-            onMouseDown={(e) => isPausedAndPivotsVisible && onAnchorMouseDown(boneKey, e.clientX, e)}
-            onTouchStart={(e) => isPausedAndPivotsVisible && onAnchorMouseDown(boneKey, e.touches[0].clientX, e)}
           />
           {isPinned && (
               <circle
@@ -259,10 +271,20 @@ export const Bone: React.FC<BoneProps> = ({
                   stroke={isAtLimit ? undefined : COLORS.PIN_HIGHLIGHT}
                   strokeWidth="2"
                   data-no-export="true"
-                  className={isAtLimit ? 'animate-strobe-red' : ''}
+                  className={`${isAtLimit ? 'animate-strobe-red' : ''} pointer-events-none`}
                   style={!isAtLimit ? { filter: `drop-shadow(0 0 3px ${COLORS.PIN_HIGHLIGHT})`} : {}}
               />
           )}
+
+          {/* Interaction Layer */}
+          <circle
+            cx="0" cy="0" r="15" // Generous radius for easier clicking
+            fill="transparent"
+            className={anchorCursorStyle}
+            data-no-export="true"
+            onMouseDown={(e) => isPausedAndPivotsVisible && onAnchorMouseDown(boneKey, e.clientX, e)}
+            onTouchStart={(e) => isPausedAndPivotsVisible && onAnchorMouseDown(boneKey, e.touches[0].clientX, e)}
+          />
         </g>
       )}
     </g>

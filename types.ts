@@ -10,10 +10,12 @@ export enum PartName {
   LElbow = 'lElbow',
   LWrist = 'lWrist',
   RThigh = 'rThigh',
-  RSkin = 'rSkin',
+  // FIX: Renamed RSkin to RCalf and its value for consistency
+  RCalf = 'rCalf',
   RAnkle = 'rAnkle',
   LThigh = 'lThigh',
-  LSkin = 'lCalf',
+  // FIX: Renamed LSkin to LCalf for consistency
+  LCalf = 'lCalf',
   LAnkle = 'lAnkle',
 }
 
@@ -126,22 +128,23 @@ export type Pose = {
 export type AnchorName = PartName | 'root' | 'lFootTip' | 'rFootTip';
 
 // Mapping between PartName enum and Pose object keys for kinematic operations.
+// FIX: Updated to use new PartName enum members and removed unnecessary `as any` casts.
 export const partNameToPoseKey: Record<string, keyof Pose> = {
   [PartName.Torso]: 'torso',
   [PartName.Waist]: 'waist',
   [PartName.Collar]: 'collar',
   [PartName.Head]: 'head',
   [PartName.RShoulder]: 'rShoulder',
-  [PartName.RElbow]: 'rForearm' as any,
+  [PartName.RElbow]: 'rForearm',
   [PartName.RWrist]: 'rWrist',
   [PartName.LShoulder]: 'lShoulder',
-  [PartName.LElbow]: 'lForearm' as any,
+  [PartName.LElbow]: 'lForearm',
   [PartName.LWrist]: 'lWrist',
   [PartName.RThigh]: 'rThigh',
-  [PartName.RSkin]: 'rCalf' as any,
+  [PartName.RCalf]: 'rCalf',
   [PartName.RAnkle]: 'rAnkle',
   [PartName.LThigh]: 'lThigh',
-  [PartName.LSkin]: 'lCalf' as any,
+  [PartName.LCalf]: 'lCalf',
   [PartName.LAnkle]: 'lAnkle',
 };
 

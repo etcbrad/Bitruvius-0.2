@@ -7,6 +7,7 @@ import { Timeline } from './components/Timeline';
 import { KeymapHelper } from './components/KeymapHelper';
 import { getScaledDimension as getKinematicDimension, lerpAngleShortestPath, distance, solveTwoBoneIK } from './utils/kinematics';
 import { useAnimationEngine } from './hooks/useAnimationEngine';
+import * as gifenc from 'gifenc';
 
 const T_POSE: WalkingEnginePivotOffsets = {
   waist: 0, neck: 0, collar: 0, torso: 0,
@@ -151,6 +152,9 @@ export const App: React.FC = () => {
   const [exportTransparentBg, setExportTransparentBg] = useState(false);
   const [exportShowAnchors, setExportShowAnchors] = useState(true);
   const svgRef = useRef<SVGSVGElement>(null);
+  const [isExportingGif, setIsExportingGif] = useState(false);
+  const [gifExportProgress, setGifExportProgress] = useState(0);
+  const [gifRenderPose, setGifRenderPose] = useState<WalkingEnginePivotOffsets | null>(null);
   
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => { if (e.key === 'CapsLock') setIsCapsLockOn(e.getModifierState('CapsLock')); };
@@ -237,6 +241,131 @@ export const App: React.FC = () => {
 
     img.src = svgDataUrl;
   }, [exportShowAnchors, exportTransparentBg, addLog]);
+
+  const handleExportGIF = useCallback(async () => {
+    if (keyframes.length < 2 || totalDuration <= 0) {
+      addLog("ERR: Not enough keyframes to create a GIF.");
+      return;
+    }
+    addLog("GIF EXPORT: Starting render...");
+    setIsExportingGif(true);
+    setGifExportProgress(0);
+  
+    const svgElement = svgRef.current;
+    if (!svgElement) {
+      addLog("ERR: SVG element not found.");
+      setIsExportingGif(false);
+      return;
+    }
+  
+    const rect = svgElement.getBoundingClientRect();
+    const scale = 1; // Use 1x for performance, can be increased for quality
+    const width = rect.width * scale;
+    const height = rect.height * scale;
+  
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+      addLog("ERR: Canvas context failed.");
+      setIsExportingGif(false);
+      return;
+    }
+  
+    const gif = gifenc.GIFEncoder();
+    const FPS = 24;
+    const delay = 1000 / FPS;
+    let firstFrame = true;
+  
+    const captureFrame = async (time: number) => {
+      if (time > totalDuration) {
+        const buffer = await gif.finish();
+        const blob = new Blob([buffer], { type: 'image/gif' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `bitruvian_anim_${Date.now()}.gif`;
+        link.click();
+        URL.revokeObjectURL(url);
+        addLog("GIF EXPORT: Finished and downloaded.");
+        setGifRenderPose(null);
+        setIsExportingGif(false);
+        return;
+      }
+  
+      // Calculate pose at current time
+      let startPose: WalkingEnginePivotOffsets, endPose: WalkingEnginePivotOffsets;
+      let segmentStartTime: number, segmentDuration: number;
+      
+      let segmentFound = false;
+      for (let i = 0; i < keyframes.length - 1; i++) {
+          if (time >= keyframes[i].time && time < keyframes[i+1].time) {
+              startPose = keyframes[i].pose; endPose = keyframes[i+1].pose;
+              segmentStartTime = keyframes[i].time; segmentDuration = keyframes[i+1].time - keyframes[i].time;
+              segmentFound = true; break;
+          }
+      }
+      if (!segmentFound) {
+          const lastKeyframe = keyframes[keyframes.length - 1];
+          startPose = lastKeyframe.pose; endPose = keyframes[0].pose;
+          segmentStartTime = lastKeyframe.time; segmentDuration = 1000;
+      }
+      
+      const timeIntoSegment = time - segmentStartTime;
+      const progress = segmentDuration > 0 ? timeIntoSegment / segmentDuration : 1;
+      const currentPose = { ...startPose } as WalkingEnginePivotOffsets;
+      JOINT_KEYS.forEach(k => {
+          currentPose[k] = lerpAngleShortestPath(startPose[k], endPose[k], progress);
+      });
+  
+      setGifRenderPose(currentPose);
+      setGifExportProgress((time / totalDuration) * 100);
+  
+      await new Promise(resolve => requestAnimationFrame(resolve));
+  
+      const svgClone = svgElement.cloneNode(true) as SVGSVGElement;
+      if (!exportShowAnchors) svgClone.querySelectorAll('[data-no-export="true"]').forEach(el => el.remove());
+      if (!exportTransparentBg) {
+        const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        bgRect.setAttribute('width', '100%'); bgRect.setAttribute('height', '100%'); bgRect.setAttribute('fill', '#FFFFFF');
+        bgRect.setAttribute('x', svgClone.viewBox.baseVal.x.toString()); bgRect.setAttribute('y', svgClone.viewBox.baseVal.y.toString());
+        svgClone.insertBefore(bgRect, svgClone.firstChild);
+      }
+      svgClone.setAttribute('width', `${width}`);
+      svgClone.setAttribute('height', `${height}`);
+      
+      const svgXml = new XMLSerializer().serializeToString(svgClone);
+      const svgDataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgXml)))}`;
+      
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => {
+            ctx.clearRect(0, 0, width, height);
+            ctx.drawImage(img, 0, 0, width, height);
+            const data = ctx.getImageData(0, 0, width, height).data;
+            let palette, indexed;
+            if (firstFrame) {
+                palette = gifenc.quantize(data, 256, { format: 'rgba4444' });
+                indexed = gifenc.applyPalette(data, palette, 'rgba4444');
+                firstFrame = false;
+            } else {
+                palette = gifenc.quantize(data, 256, { format: 'rgba4444' });
+                indexed = gifenc.applyPalette(data, palette, 'rgba4444');
+            }
+            gif.writeFrame(indexed, width, height, { palette, delay });
+            resolve();
+        };
+        img.onerror = reject;
+        img.src = svgDataUrl;
+      });
+  
+      captureFrame(time + delay);
+    };
+  
+    captureFrame(0);
+  
+  }, [keyframes, totalDuration, exportShowAnchors, exportTransparentBg, addLog]);
 
   const handleAddKeyframe = useCallback(() => {
     if (isAnimating || isTransitioning) return;
@@ -624,6 +753,7 @@ useEffect(() => {
   const rotationControlLabel = primaryPin === 'waist' ? 'Body Rotation' : `Rotation @ ${primaryPin.replace(/_/g, ' ')}`;
   const frictionLabel = motionStyle === 'clockwork' ? 'Tick Rate' : motionStyle === 'lotte' ? 'Tail Length' : 'Joint Friction';
   const mannequinOffsets = useMemo(() => { if (isCalibrating) return pivotOffsets; if (motionStyle === 'lotte') return displayedPivotOffsets; if (predictiveGhostingEnabled && previewPivotOffsets) { return pivotOffsets; } return previewPivotOffsets || pivotOffsets; }, [isCalibrating, motionStyle, displayedPivotOffsets, pivotOffsets, previewPivotOffsets, predictiveGhostingEnabled]);
+  const mannequinRenderPose = gifRenderPose || mannequinOffsets;
 
   return (
     <div className="flex h-full w-full bg-paper font-mono text-ink overflow-hidden select-none">
@@ -705,7 +835,7 @@ useEffect(() => {
             )}
             {activeControlTab === 'perf' && ( <div className="flex flex-col gap-4 pt-4 animate-in fade-in slide-in-from-right duration-200"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Environment</div> <div className="flex flex-col gap-2 p-2 border border-ridge/50 rounded bg-white/30"> <button onClick={() => setHardStopEnabled(p => !p)} className={`text-sm px-3 py-1 border transition-all ${hardStopEnabled ? 'bg-accent-red text-paper border-accent-red' : 'bg-paper/10 text-mono-mid border-ridge'}`} > HARD STOP: {hardStopEnabled ? 'ON' : 'OFF'} </button> <p className="text-[10px] text-mono-light italic text-center pt-1">When ON, prevents pins stretching beyond 20px.</p> </div> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Intent Preview</div> <div className="flex flex-col gap-2 p-2 border border-ridge/50 rounded bg-white/30"> <button onClick={() => { saveToHistory(); recordSnapshot(showIntentPath ? 'INTENT_PATH_OFF' : 'INTENT_PATH_ON'); setShowIntentPath(prev => !prev); }} className={`text-sm px-3 py-1 border transition-all ${showIntentPath ? 'bg-accent-green text-paper border-accent-green' : 'bg-paper/10 text-mono-mid border-ridge'}`} disabled={isTransitioning}> PREVIEW DEPTH: {showIntentPath ? '5 FRAMES' : 'OFF'} </button> </div> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Motion Style</div> <div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"> <div className="grid grid-cols-3 gap-1"> {(['standard', 'clockwork', 'lotte'] as MotionStyle[]).map(style => ( <button key={style} onClick={() => { setMotionStyle(style); if(style !== 'standard') setTargetFps(12); else setTargetFps(null); }} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${motionStyle === style ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}> {style} </button> ))} </div> </div> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Rendering FPS</div> <div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"> <div className="grid grid-cols-3 gap-1"> <button onClick={() => setTargetFps(null)} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${!targetFps ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}>Max</button> <button onClick={() => setTargetFps(24)} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${targetFps === 24 ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}>24</button> <button onClick={() => setTargetFps(12)} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${targetFps === 12 ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}>12</button> </div> </div> </div> )}
             {activeControlTab === 'props' && ( <div className="flex flex-col gap-4 animate-in fade-in slide-in-from-right duration-200"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 flex justify-between items-center"> <span>Anatomical Resizing</span> <button onClick={resetProps} disabled={isAnimating || isTransitioning} className="text-xs text-selection hover:underline disabled:opacity-50">RESET</button> </div> <div className="flex flex-col gap-4 pr-2 h-[400px] overflow-y-auto custom-scrollbar"> {PROP_KEYS.map(k => ( <div key={k} className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"> <div className="text-sm font-bold uppercase text-ink">{k.replace(/_/g, ' ')}</div> <div className="space-y-1"> <div className="flex justify-between text-xs uppercase text-mono-light"><span>Height Scale</span><span>{props[k].h.toFixed(2)}x</span></div> <input type="range" min="0.2" max="3" step="0.01" value={props[k].h} disabled={isAnimating || isTransitioning} onMouseDown={() => {saveToHistory(); recordSnapshot(`START_PROP_H_${k}`);}} onChange={e => updateProp(k, 'h', parseFloat(e.target.value))} onMouseUp={() => recordSnapshot(`END_PROP_H_${k}`)} className="w-full h-1 accent-mono-mid disabled:opacity-50" /> </div> <div className="space-y-1"> <div className="flex justify-between text-xs uppercase text-mono-light"><span>Width Scale</span><span>{props[k].w.toFixed(2)}x</span></div> <input type="range" min="0.2" max="3" step="0.01" value={props[k].w} disabled={isAnimating || isTransitioning} onMouseDown={() => {saveToHistory(); recordSnapshot(`START_PROP_W_${k}`);}} onChange={e => updateProp(k, 'w', parseFloat(e.target.value))} onMouseUp={() => recordSnapshot(`END_PROP_W_${k}`)} className="w-full h-1 accent-mono-mid disabled:opacity-50" /> </div> </div> ))} </div> </div> )}
-            {activeControlTab === 'animation' && ( <div className="flex flex-col gap-4 animate-in fade-in duration-200"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Animation Timeline</div> <Timeline keyframes={keyframes} onPlay={handlePlay} onPause={handlePause} onReset={handleFullAnimationReset} isAnimating={isAnimating} animationTime={animationTime} totalDuration={totalDuration} onAddKeyframe={handleAddKeyframe} onSelectKeyframe={handleSelectKeyframe} selectedKeyframeIndex={selectedKeyframeIndex} onScrub={handleScrub} onUpdateKeyframeTime={handleUpdateKeyframeTime} onAddTweenFrame={handleAddTweenFrame} /> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 mt-2">Onion Skinning</div><div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"><button onClick={() => setShowOnionSkins(p => !p)} className={`w-full text-sm px-3 py-1 border transition-all ${showOnionSkins ? 'bg-accent-green text-paper border-accent-green' : 'bg-paper/10 text-mono-mid border-ridge'}`}> ONION SKINS: {showOnionSkins ? 'ON' : 'OFF'} </button><div className="grid grid-cols-2 gap-4 pt-1"><div className="flex flex-col gap-1"><label className="text-xs uppercase font-bold text-mono-light">Before</label><input type="number" min="0" max="5" value={onionSkinFrames.before} onChange={e => setOnionSkinFrames(f => ({...f, before: parseInt(e.target.value) || 0}))} className="w-full bg-paper/50 border border-ridge/50 p-1 text-center rounded-sm" /></div><div className="flex flex-col gap-1"><label className="text-xs uppercase font-bold text-mono-light">After</label><input type="number" min="0" max="5" value={onionSkinFrames.after} onChange={e => setOnionSkinFrames(f => ({...f, after: parseInt(e.target.value) || 0}))} className="w-full bg-paper/50 border border-ridge/50 p-1 text-center rounded-sm" /></div></div> {isCapsLockOn && <div className="text-center text-accent-orange font-bold text-xs pt-1 animate-pulse tracking-widest">POSE-SELECT ACTIVE</div>}</div><div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 mt-2">PNG Export</div><div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-3"><div className="flex items-center justify-between"><label htmlFor="transparent-bg" className="text-sm text-ink">Transparent Background</label><button id="transparent-bg" onClick={() => setExportTransparentBg(p => !p)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${exportTransparentBg ? 'bg-accent-green' : 'bg-gray-200'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${exportTransparentBg ? 'translate-x-6' : 'translate-x-1'}`}/></button></div><div className="flex items-center justify-between"><label htmlFor="show-anchors" className="text-sm text-ink">Show Anchors</label><button id="show-anchors" onClick={() => setExportShowAnchors(p => !p)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${exportShowAnchors ? 'bg-accent-green' : 'bg-gray-200'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${exportShowAnchors ? 'translate-x-6' : 'translate-x-1'}`}/></button></div><button onClick={handleExportPNG} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors">EXPORT PNG</button></div></div> )}
+            {activeControlTab === 'animation' && ( <div className="flex flex-col gap-4 animate-in fade-in duration-200"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Animation Timeline</div> <Timeline keyframes={keyframes} onPlay={handlePlay} onPause={handlePause} onReset={handleFullAnimationReset} isAnimating={isAnimating} animationTime={animationTime} totalDuration={totalDuration} onAddKeyframe={handleAddKeyframe} onSelectKeyframe={handleSelectKeyframe} selectedKeyframeIndex={selectedKeyframeIndex} onScrub={handleScrub} onUpdateKeyframeTime={handleUpdateKeyframeTime} onAddTweenFrame={handleAddTweenFrame} /> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 mt-2">Onion Skinning</div><div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"><button onClick={() => setShowOnionSkins(p => !p)} className={`w-full text-sm px-3 py-1 border transition-all ${showOnionSkins ? 'bg-accent-green text-paper border-accent-green' : 'bg-paper/10 text-mono-mid border-ridge'}`}> ONION SKINS: {showOnionSkins ? 'ON' : 'OFF'} </button><div className="grid grid-cols-2 gap-4 pt-1"><div className="flex flex-col gap-1"><label className="text-xs uppercase font-bold text-mono-light">Before</label><input type="number" min="0" max="5" value={onionSkinFrames.before} onChange={e => setOnionSkinFrames(f => ({...f, before: parseInt(e.target.value) || 0}))} className="w-full bg-paper/50 border border-ridge/50 p-1 text-center rounded-sm" /></div><div className="flex flex-col gap-1"><label className="text-xs uppercase font-bold text-mono-light">After</label><input type="number" min="0" max="5" value={onionSkinFrames.after} onChange={e => setOnionSkinFrames(f => ({...f, after: parseInt(e.target.value) || 0}))} className="w-full bg-paper/50 border border-ridge/50 p-1 text-center rounded-sm" /></div></div> {isCapsLockOn && <div className="text-center text-accent-orange font-bold text-xs pt-1 animate-pulse tracking-widest">POSE-SELECT ACTIVE</div>}</div><div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 mt-2">Export</div><div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-3"><div className="flex items-center justify-between"><label htmlFor="transparent-bg" className="text-sm text-ink">Transparent Background</label><button id="transparent-bg" onClick={() => setExportTransparentBg(p => !p)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${exportTransparentBg ? 'bg-accent-green' : 'bg-gray-200'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${exportTransparentBg ? 'translate-x-6' : 'translate-x-1'}`}/></button></div><div className="flex items-center justify-between"><label htmlFor="show-anchors" className="text-sm text-ink">Show Anchors</label><button id="show-anchors" onClick={() => setExportShowAnchors(p => !p)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${exportShowAnchors ? 'bg-accent-green' : 'bg-gray-200'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${exportShowAnchors ? 'translate-x-6' : 'translate-x-1'}`}/></button></div><div className="grid grid-cols-2 gap-2"> <button onClick={handleExportPNG} disabled={isExportingGif} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors disabled:opacity-50">EXPORT PNG</button> <button onClick={handleExportGIF} disabled={isExportingGif || keyframes.length < 2} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors disabled:opacity-50">EXPORT GIF</button> </div> {isExportingGif && (<div className="space-y-1"><div className="text-xs text-center text-ink">Generating GIF... ({gifExportProgress.toFixed(0)}%)</div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-accent-green h-1.5 rounded-full" style={{width: `${gifExportProgress}%`}}></div></div></div>)}</div></div> )}
           </div>
           <div className="flex flex-col gap-4 pt-4 border-t border-ridge"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Serialization</div> <textarea readOnly value={poseString} className="w-full text-sm bg-white border border-ridge p-2 font-mono custom-scrollbar resize-none h-24" /> <div className="flex flex-col gap-2"> <button onClick={copyToClipboard} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors">COPY STATE STRING</button> <button onClick={saveToFile} className="w-full text-sm px-3 py-2 border border-ridge font-bold text-mono-mid hover:bg-mono-dark transition-colors">EXPORT FILE</button> </div> </div>
           <SystemLogger logs={recordingHistory} isVisible={true} onExportJSON={exportRecordingJSON} onClearHistory={clearHistory} historyCount={recordingHistory.length} onLogMouseEnter={setOnionSkinData} onLogMouseLeave={() => setOnionSkinData(null)} onLogClick={handleLogClick} selectedLogIndex={selectedLogIndex} />
@@ -723,7 +853,7 @@ useEffect(() => {
           {backgroundImage && (<image id="background-image-renderer" href={backgroundImage} x="-500" y="-500" width="1000" height="1000" preserveAspectRatio="xMidYMid slice" transform={`translate(${backgroundTransform.x}, ${backgroundTransform.y}) rotate(${backgroundTransform.rotation}) scale(${backgroundTransform.scale})`} className="pointer-events-none" /> )}
           <g transform={`translate(${physicsState.position.x}, ${physicsState.position.y})`} className="relative z-10">
               <g transform={`rotate(${bodyRotation}, ${pinnedJointPosition.x}, ${pinnedJointPosition.y})`} className={backgroundImage ? `mix-blend-${blendMode}` : ''}>
-                 {onionSkinPoses.map((skin, i) => (
+                 {!isExportingGif && onionSkinPoses.map((skin, i) => (
                     <Mannequin 
                         key={`onion-${skin.index}-${i}`}
                         pose={RESTING_BASE_POSE}
@@ -740,10 +870,10 @@ useEffect(() => {
                         onClick={() => handleSelectKeyframe(skin.index)}
                     />
                  ))}
-                 {staticGhostPose && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={staticGhostPose} props={props} isGhost={true} ghostType={'static'} ghostOpacity={0.4} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> )}
-                 {predictiveGhostingEnabled && ghostType === 'fk' && previewPivotOffsets && ( <> {showIntentPath && staticGhostPose && draggingBoneKeyRef.current && Array.from({ length: 5 }).map((_, i) => { const t = (i + 1) / 5; const draggedKey = draggingBoneKeyRef.current!; const startValue = staticGhostPose[draggedKey]!; const endValue = previewPivotOffsets[draggedKey]!; const interpolatedValue = lerpAngleShortestPath(startValue, endValue, t); const delta = interpolatedValue - startValue; const basePoseForStep = { ...staticGhostPose, [draggedKey]: interpolatedValue }; const finalInterpolatedOffsets = applyChainReaction(draggedKey, delta, basePoseForStep); const opacity = 0.1 + t * 0.5; return ( <Mannequin key={`ghost-path-${i}`} pose={RESTING_BASE_POSE} pivotOffsets={finalInterpolatedOffsets} props={props} isGhost={true} ghostType={'fk'} ghostOpacity={opacity} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> ); })} {!showIntentPath && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={previewPivotOffsets} props={props} isGhost={true} ghostType={'fk'} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> )} </> )}
-                 {onionSkinData && !previewPivotOffsets && !showOnionSkins && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={onionSkinData.pivotOffsets} props={onionSkinData.props} isGhost={true} ghostType={'static'} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} /> )}
-                <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={mannequinOffsets} props={props} showPivots={isCalibrated} showLabels={showLabels} baseUnitH={baseH} onAnchorMouseDown={onAnchorMouseDown} onBodyMouseDown={handleBodyMouseDown} draggingBoneKey={draggingBoneKey} selectedBoneKeys={activeSelectionKeys} isPaused={true} maskImage={maskImage} maskTransform={maskTransform} onPositionsUpdate={setAllJointPositions} activePins={activePins} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} />
+                 {!isExportingGif && staticGhostPose && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={staticGhostPose} props={props} isGhost={true} ghostType={'static'} ghostOpacity={0.4} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> )}
+                 {!isExportingGif && predictiveGhostingEnabled && ghostType === 'fk' && previewPivotOffsets && ( <> {showIntentPath && staticGhostPose && draggingBoneKeyRef.current && Array.from({ length: 5 }).map((_, i) => { const t = (i + 1) / 5; const draggedKey = draggingBoneKeyRef.current!; const startValue = staticGhostPose[draggedKey]!; const endValue = previewPivotOffsets[draggedKey]!; const interpolatedValue = lerpAngleShortestPath(startValue, endValue, t); const delta = interpolatedValue - startValue; const basePoseForStep = { ...staticGhostPose, [draggedKey]: interpolatedValue }; const finalInterpolatedOffsets = applyChainReaction(draggedKey, delta, basePoseForStep); const opacity = 0.1 + t * 0.5; return ( <Mannequin key={`ghost-path-${i}`} pose={RESTING_BASE_POSE} pivotOffsets={finalInterpolatedOffsets} props={props} isGhost={true} ghostType={'fk'} ghostOpacity={opacity} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> ); })} {!showIntentPath && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={previewPivotOffsets} props={props} isGhost={true} ghostType={'fk'} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> )} </> )}
+                 {!isExportingGif && onionSkinData && !previewPivotOffsets && !showOnionSkins && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={onionSkinData.pivotOffsets} props={onionSkinData.props} isGhost={true} ghostType={'static'} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} /> )}
+                <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={mannequinRenderPose} props={props} showPivots={isCalibrated && !isExportingGif} showLabels={showLabels} baseUnitH={baseH} onAnchorMouseDown={onAnchorMouseDown} onBodyMouseDown={handleBodyMouseDown} draggingBoneKey={draggingBoneKey} selectedBoneKeys={activeSelectionKeys} isPaused={true} maskImage={maskImage} maskTransform={maskTransform} onPositionsUpdate={setAllJointPositions} activePins={activePins} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} />
               </g>
           </g>
         </svg>

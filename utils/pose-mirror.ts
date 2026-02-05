@@ -1,4 +1,3 @@
-
 // utils/pose-mirror.ts
 
 import { Pose, PartName, partNameToPoseKey } from '../types';
@@ -46,7 +45,8 @@ export const mirrorPose = (originalPoseString: string, originalId: string, origi
   swapAndMirror(PartName.LElbow, PartName.RElbow);
   swapAndMirror(PartName.LWrist, PartName.RWrist);
   swapAndMirror(PartName.LThigh, PartName.RThigh);
-  swapAndMirror(PartName.LSkin, PartName.RSkin);
+  // FIX: Use updated PartName members for calf/shin parts.
+  swapAndMirror(PartName.LCalf, PartName.RCalf);
   swapAndMirror(PartName.LAnkle, PartName.RAnkle);
 
   // For central parts like Waist, Torso, Collar, Head, their rotations are generally
