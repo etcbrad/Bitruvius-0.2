@@ -1,0 +1,99 @@
+
+
+.timeline-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background-color: #F9FAFB; /* mono-dark */
+  border: 1px solid #E5E7EB; /* ridge */
+  border-radius: 4px;
+}
+
+.timeline-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timeline-button {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #E5E7EB; /* ridge */
+  background-color: #FFFFFF; /* paper */
+  color: #111827; /* ink */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.timeline-button:hover {
+  background-color: #F3F4F6; /* mono-darker */
+}
+
+.timeline-duration {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: #6B7280; /* mono-light */
+    margin-left: auto;
+    padding: 4px 8px;
+    background: #E5E7EB;
+    border-radius: 2px;
+}
+
+.timeline-track-wrapper {
+  width: 100%;
+  background-color: #E5E7EB; /* ridge */
+  padding: 4px;
+  border-radius: 2px;
+  overflow-x: auto;
+  min-height: 60px;
+}
+
+.timeline-track {
+  position: relative;
+  /* width is now set dynamically via style prop */
+  height: 50px;
+}
+
+.timeline-clip {
+  position: absolute;
+  height: 100%;
+  background-color: #4B5563; /* mono-mid */
+  border: 1px solid #111827; /* ink */
+  border-radius: 3px;
+  color: #FFFFFF; /* paper */
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  cursor: grab;
+  overflow: hidden;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+  transition: background-color 0.2s;
+}
+
+.timeline-clip:hover {
+    background-color: #374151; /* selection-light */
+}
+
+.clip-name {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  pointer-events: none; /* Make text non-interactive */
+}
+
+.timeline-playback-head {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    background-color: #EF4444; /* accent-red */
+    pointer-events: none;
+    z-index: 10;
+    box-shadow: 0 0 5px rgba(239, 68, 68, 0.5);
+}

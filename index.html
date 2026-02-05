@@ -1,0 +1,124 @@
+
+<!-- DO NOT DELETE: BITRUVIUS CANONICAL FIGURE v1.0 -->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bitruvius Anatomical Model (Standalone)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=VT323&display=block" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              mono: ['"JetBrains Mono"', 'monospace'],
+              archaic: ['"VT323"', 'monospace'],
+            },
+            backgroundImage: {
+              'triangle-grid': `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3e%3cpath d='M12 0 L0 12 L12 24 L24 12 Z M0 0 L12 24 L24 0 Z' stroke='rgba(229, 231, 235, 1)' stroke-width='1' fill='none'/%3e%3c/svg%3e")`,
+            },
+            colors: {
+              paper: '#FFFFFF',
+              ink: '#111827',
+              'mono-light': '#6B7280',
+              'mono-mid': '#4B5563',
+              'mono-dark': '#F9FAFB', // Light panel bg
+              'mono-darker': '#F3F4F6', // Darker panel bg
+              selection: '#111827',
+              'selection-light': '#374151',
+              'selection-super-light': '#E5E7EB',
+              'limb-highlight': '#4B5563',
+              'accent-purple': '#9333ea',
+              'accent-green': '#16a34a',
+              'accent-orange': '#f97316',
+              'accent-red': '#EF4444',
+              'shell': '#F9FAFB',
+              'black': '#000000',
+              'ridge': '#E5E7EB', // Light borders
+              'focus-ring': '#374151',
+              'olive': '#808000',
+            },
+            animation: {
+                'terminal-boot': 'terminal-boot 2s steps(1, end) forwards',
+                'pulse-red': 'pulse-red 1.5s ease-in-out infinite',
+                'strobe-red': 'strobe-red 0.3s linear infinite'
+            },
+            keyframes: {
+                'terminal-boot': {
+                    '0%': { opacity: '0' },
+                    '10%, 20%, 30%, 50%, 70%, 90%': { opacity: '1' },
+                    '15%, 25%, 55%, 75%': { opacity: '0.3' },
+                    '100%': { opacity: '0' },
+                },
+                'pulse-red': {
+                  '0%, 100%': { fill: '#f87171' /* red-400 */, filter: 'drop-shadow(0 0 2px #ef4444)'},
+                  '50%': { fill: '#ef4444' /* red-500 */, filter: 'drop-shadow(0 0 5px #ef4444)'},
+                },
+                'strobe-red': {
+                  '0%, 100%': { stroke: '#fca5a5' /* red-300 */, filter: 'drop-shadow(0 0 4px #f87171)'},
+                  '50%': { stroke: '#b91c1c' /* red-800 */, filter: 'drop-shadow(0 0 8px #ef4444)'},
+                }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      html, body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+      body {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background-color: #F3F4F6; /* Fallback body color */
+      }
+      #root {
+        width: 100%;
+        height: 100%;
+      }
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 6px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: #e5e7eb;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #9ca3af;
+        border-radius: 3px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: #6b7280;
+      }
+      .slider-vertical {
+        -webkit-appearance: slider-vertical;
+        writing-mode: bt-lr;
+      }
+      #orientation-lock-message {
+        display: none !important;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "react": "https://esm.sh/react@18.3.1",
+    "jszip": "https://esm.sh/jszip@3.10.1",
+    "file-saver": "https://esm.sh/file-saver@2.0.5",
+    "react-dom/": "https://esm.sh/react-dom@18.3.1/",
+    "react/": "https://esm.sh/react@18.3.1/"
+  }
+}
+</script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
+  </body>
+</html>
