@@ -1,9 +1,15 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
-import { Keyframe, WalkingEnginePivotOffsets } from '../types';
+import { Keyframe, WalkingEnginePivotOffsets, EasingType } from '../types';
 import { JOINT_KEYS } from '../constants';
-import { lerpAngleShortestPath } from '../utils/kinematics';
+import { lerpAngleShortestPath, easeOutCubic, easeInOutCubic, linear } from '../utils/kinematics';
 
 const LOOP_DURATION = 1000; // Fixed duration for the loop from the last frame back to the first.
+
+const easingFunctions: Record<EasingType, (t: number) => number> = {
+    'linear': linear,
+    'ease-out': easeOutCubic,
+    'ease-in-out': easeInOutCubic,
+};
 
 export const useAnimationEngine = (
     keyframes: Keyframe[], 
@@ -36,7 +42,7 @@ export const useAnimationEngine = (
             let newTime = prevTime + deltaTime;
             newTime %= totalDuration;
             
-            let startPose: WalkingEnginePivotOffsets;
+            let startKeyframe: Keyframe;
             let endPose: WalkingEnginePivotOffsets;
             let segmentStartTime: number;
             let segmentDuration: number;
@@ -45,7 +51,7 @@ export const useAnimationEngine = (
             let segmentFound = false;
             for (let i = 0; i < keyframes.length - 1; i++) {
                 if (newTime >= keyframes[i].time && newTime < keyframes[i+1].time) {
-                    startPose = keyframes[i].pose;
+                    startKeyframe = keyframes[i];
                     endPose = keyframes[i+1].pose;
                     segmentStartTime = keyframes[i].time;
                     segmentDuration = keyframes[i+1].time - keyframes[i].time;
@@ -57,7 +63,7 @@ export const useAnimationEngine = (
             // If not found, it must be in the last segment (looping back to start)
             if (!segmentFound) {
                 const lastKeyframe = keyframes[keyframes.length - 1];
-                startPose = lastKeyframe.pose;
+                startKeyframe = lastKeyframe;
                 endPose = keyframes[0].pose;
                 segmentStartTime = lastKeyframe.time;
                 segmentDuration = LOOP_DURATION;
@@ -65,12 +71,16 @@ export const useAnimationEngine = (
             
             const timeIntoSegment = newTime - segmentStartTime;
             const progress = segmentDuration > 0 ? timeIntoSegment / segmentDuration : 1;
+
+            const easingType = startKeyframe!.easing || 'linear';
+            const easingFunc = easingFunctions[easingType] || linear;
+            const easedProgress = easingFunc(progress);
             
-            const nextPose = { ...startPose } as WalkingEnginePivotOffsets;
+            const nextPose = { ...startKeyframe!.pose } as WalkingEnginePivotOffsets;
             JOINT_KEYS.forEach(k => {
-                const start = startPose[k];
+                const start = startKeyframe!.pose[k];
                 const end = endPose[k];
-                nextPose[k] = lerpAngleShortestPath(start, end, progress);
+                nextPose[k] = lerpAngleShortestPath(start, end, easedProgress);
             });
             onPoseUpdate(nextPose);
 

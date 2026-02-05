@@ -31,7 +31,7 @@ interface MannequinProps {
   onClick?: () => void;
 }
 
-const RENDER_ORDER: (keyof WalkingEngineProportions)[] = [
+export const RENDER_ORDER: (keyof WalkingEngineProportions)[] = [
     'waist', 'torso', 'l_upper_leg', 'r_upper_leg', 'l_lower_leg', 'r_lower_leg', 'l_foot', 'r_foot', 'l_toe', 'r_toe', 
     'collar', 'head', 'l_upper_arm', 'r_upper_arm', 'l_lower_arm', 'r_lower_arm', 'l_hand', 'r_hand'
 ];

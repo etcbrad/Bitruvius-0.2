@@ -1,5 +1,5 @@
 import React, { useRef, useCallback } from 'react';
-import { Keyframe } from '../types';
+import { Keyframe, EasingType } from '../types';
 import './Timeline.css';
 
 interface TimelineProps {
@@ -16,9 +16,13 @@ interface TimelineProps {
   onScrub: (time: number) => void;
   onUpdateKeyframeTime: (index: number, time: number) => void;
   onAddTweenFrame: () => void;
+  onUpdateKeyframeEasing: (index: number, easing: EasingType) => void;
+  onUpdateKeyframePose: (index: number) => void;
+  onRemoveKeyframe: (index: number) => void;
 }
 
 const MIN_SEGMENT_DURATION = 100; // 100ms
+const EASING_OPTIONS: EasingType[] = ['linear', 'ease-out', 'ease-in-out'];
 
 export const Timeline: React.FC<TimelineProps> = ({ 
     keyframes,
@@ -34,6 +38,9 @@ export const Timeline: React.FC<TimelineProps> = ({
     onScrub,
     onUpdateKeyframeTime,
     onAddTweenFrame,
+    onUpdateKeyframeEasing,
+    onUpdateKeyframePose,
+    onRemoveKeyframe,
 }) => {
   const trackRef = useRef<HTMLDivElement>(null);
   const playbackHeadPosition = totalDuration > 0 ? (animationTime / totalDuration) * 100 : 0;
@@ -144,6 +151,42 @@ export const Timeline: React.FC<TimelineProps> = ({
           />
         </div>
       </div>
+       {selectedKeyframeIndex !== null && (
+        <div className="timeline-extra-controls">
+          <div className="timeline-easing-controls">
+            <span className="easing-label">Easing:</span>
+            {EASING_OPTIONS.map(easing => {
+              const currentEasing = keyframes[selectedKeyframeIndex!]?.easing || 'linear';
+              const isActive = currentEasing === easing;
+              return (
+                <button
+                  key={easing}
+                  onClick={() => onUpdateKeyframeEasing(selectedKeyframeIndex, easing)}
+                  className={`easing-button ${isActive ? 'active' : ''}`}
+                >
+                  {easing}
+                </button>
+              )
+            })}
+          </div>
+          <div className="timeline-keyframe-actions">
+            <button
+                onClick={() => onUpdateKeyframePose(selectedKeyframeIndex)}
+                className="keyframe-action-button update-button"
+                title="Update selected keyframe to match current pose"
+            >
+                Update Pose
+            </button>
+            <button
+                onClick={() => onRemoveKeyframe(selectedKeyframeIndex)}
+                className="keyframe-action-button remove-button"
+                title="Remove selected keyframe"
+            >
+                Remove
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

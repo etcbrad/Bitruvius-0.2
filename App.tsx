@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { WalkingEnginePose, WalkingEnginePivotOffsets, WalkingEngineProportions, Vector2D, MaskTransform, GlobalPositions, PhysicsState, JointChainBehaviors, Keyframe } from './types';
+import { WalkingEnginePose, WalkingEnginePivotOffsets, WalkingEngineProportions, Vector2D, MaskTransform, GlobalPositions, PhysicsState, JointChainBehaviors, Keyframe, EasingType } from './types';
 import { ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT, RIGGING, JOINT_KEYS } from './constants'; 
-import { Mannequin, partDefinitions } from './components/Mannequin';
+import { Mannequin, partDefinitions, RENDER_ORDER } from './components/Mannequin';
+import { Bone } from './components/Bone';
 import { SystemLogger } from './components/SystemLogger';
 import { Timeline } from './components/Timeline';
 import { KeymapHelper } from './components/KeymapHelper';
 import { getScaledDimension as getKinematicDimension, lerpAngleShortestPath, distance, solveTwoBoneIK } from './utils/kinematics';
 import { useAnimationEngine } from './hooks/useAnimationEngine';
-import * as gifenc from 'gifenc';
+import * as UPNG from 'upng-js';
 
 const T_POSE: WalkingEnginePivotOffsets = {
   waist: 0, neck: 0, collar: 0, torso: 0,
@@ -71,6 +72,27 @@ const JOINT_CHILD_MAP: Partial<Record<keyof WalkingEnginePivotOffsets, keyof Wal
 const JOINT_PARENT_MAP: Partial<Record<keyof WalkingEnginePivotOffsets, keyof WalkingEnginePivotOffsets>> = Object.fromEntries(
   Object.entries(JOINT_CHILD_MAP).map(([parent, child]) => [child, parent as keyof WalkingEnginePivotOffsets])
 );
+
+const SHEET_LAYOUT: Record<keyof WalkingEngineProportions, { x: number; y: number; rotation: number }> = {
+  head:   { x: 0, y: -450, rotation: 0 },
+  collar: { x: 0, y: -320, rotation: 0 },
+  torso:  { x: 0, y: 0,    rotation: 0 },
+  waist:  { x: 0, y: 220,  rotation: 0 },
+  l_upper_arm: { x: -400, y: -200, rotation: 45 },
+  l_lower_arm: { x: -250, y: -250, rotation: 45 },
+  l_hand:      { x: -150, y: -350, rotation: 45 },
+  r_upper_arm: { x: 400, y: -200, rotation: -45 },
+  r_lower_arm: { x: 250, y: -250, rotation: -45 },
+  r_hand:      { x: 150, y: -350, rotation: -45 },
+  l_upper_leg: { x: -350, y: 250, rotation: 0 },
+  l_lower_leg: { x: -200, y: 250, rotation: 0 },
+  l_foot:      { x: -350, y: 500, rotation: 0 },
+  l_toe:       { x: -200, y: 500, rotation: 0 },
+  r_upper_leg: { x: 350, y: 250, rotation: 0 },
+  r_lower_leg: { x: 200, y: 250, rotation: 0 },
+  r_foot:      { x: 350, y: 500, rotation: 0 },
+  r_toe:       { x: 200, y: 500, rotation: 0 },
+};
 
 const easeOutExpo = (t: number): number => {
   return t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
@@ -152,9 +174,11 @@ export const App: React.FC = () => {
   const [exportTransparentBg, setExportTransparentBg] = useState(false);
   const [exportShowAnchors, setExportShowAnchors] = useState(true);
   const svgRef = useRef<SVGSVGElement>(null);
-  const [isExportingGif, setIsExportingGif] = useState(false);
-  const [gifExportProgress, setGifExportProgress] = useState(0);
-  const [gifRenderPose, setGifRenderPose] = useState<WalkingEnginePivotOffsets | null>(null);
+  const [isExportingApng, setIsExportingApng] = useState(false);
+  const [apngExportProgress, setApngExportProgress] = useState(0);
+  const [exportRenderPose, setExportRenderPose] = useState<WalkingEnginePivotOffsets | null>(null);
+  const [isPreviewingMotion, setIsPreviewingMotion] = useState(false);
+  const [isSheetView, setIsSheetView] = useState(false);
   
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => { if (e.key === 'CapsLock') setIsCapsLockOn(e.getModifierState('CapsLock')); };
@@ -242,131 +266,119 @@ export const App: React.FC = () => {
     img.src = svgDataUrl;
   }, [exportShowAnchors, exportTransparentBg, addLog]);
 
-  const handleExportGIF = useCallback(async () => {
+  const handleExportAPNG = useCallback(async () => {
     if (keyframes.length < 2 || totalDuration <= 0) {
-      addLog("ERR: Not enough keyframes to create a GIF.");
+      addLog("ERR: Not enough keyframes to create an APNG.");
       return;
     }
-    addLog("GIF EXPORT: Starting render...");
-    setIsExportingGif(true);
-    setGifExportProgress(0);
+    addLog("APNG EXPORT: Starting render...");
+    setIsExportingApng(true);
+    setApngExportProgress(0);
   
     const svgElement = svgRef.current;
     if (!svgElement) {
       addLog("ERR: SVG element not found.");
-      setIsExportingGif(false);
+      setIsExportingApng(false);
       return;
     }
   
     const rect = svgElement.getBoundingClientRect();
-    const scale = 1; // Use 1x for performance, can be increased for quality
+    const scale = 1;
     const width = rect.width * scale;
     const height = rect.height * scale;
   
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const ctx = canvas.getContext('2d');
     if (!ctx) {
       addLog("ERR: Canvas context failed.");
-      setIsExportingGif(false);
+      setIsExportingApng(false);
       return;
     }
   
-    const gif = gifenc.GIFEncoder();
     const FPS = 24;
-    const delay = 1000 / FPS;
-    let firstFrame = true;
-  
-    const captureFrame = async (time: number) => {
-      if (time > totalDuration) {
-        const buffer = await gif.finish();
-        const blob = new Blob([buffer], { type: 'image/gif' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `bitruvian_anim_${Date.now()}.gif`;
-        link.click();
-        URL.revokeObjectURL(url);
-        addLog("GIF EXPORT: Finished and downloaded.");
-        setGifRenderPose(null);
-        setIsExportingGif(false);
-        return;
-      }
-  
-      // Calculate pose at current time
-      let startPose: WalkingEnginePivotOffsets, endPose: WalkingEnginePivotOffsets;
-      let segmentStartTime: number, segmentDuration: number;
-      
-      let segmentFound = false;
-      for (let i = 0; i < keyframes.length - 1; i++) {
-          if (time >= keyframes[i].time && time < keyframes[i+1].time) {
-              startPose = keyframes[i].pose; endPose = keyframes[i+1].pose;
-              segmentStartTime = keyframes[i].time; segmentDuration = keyframes[i+1].time - keyframes[i].time;
-              segmentFound = true; break;
-          }
-      }
-      if (!segmentFound) {
-          const lastKeyframe = keyframes[keyframes.length - 1];
-          startPose = lastKeyframe.pose; endPose = keyframes[0].pose;
-          segmentStartTime = lastKeyframe.time; segmentDuration = 1000;
-      }
-      
-      const timeIntoSegment = time - segmentStartTime;
-      const progress = segmentDuration > 0 ? timeIntoSegment / segmentDuration : 1;
-      const currentPose = { ...startPose } as WalkingEnginePivotOffsets;
-      JOINT_KEYS.forEach(k => {
-          currentPose[k] = lerpAngleShortestPath(startPose[k], endPose[k], progress);
-      });
-  
-      setGifRenderPose(currentPose);
-      setGifExportProgress((time / totalDuration) * 100);
-  
-      await new Promise(resolve => requestAnimationFrame(resolve));
-  
-      const svgClone = svgElement.cloneNode(true) as SVGSVGElement;
-      if (!exportShowAnchors) svgClone.querySelectorAll('[data-no-export="true"]').forEach(el => el.remove());
-      if (!exportTransparentBg) {
-        const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        bgRect.setAttribute('width', '100%'); bgRect.setAttribute('height', '100%'); bgRect.setAttribute('fill', '#FFFFFF');
-        bgRect.setAttribute('x', svgClone.viewBox.baseVal.x.toString()); bgRect.setAttribute('y', svgClone.viewBox.baseVal.y.toString());
-        svgClone.insertBefore(bgRect, svgClone.firstChild);
-      }
-      svgClone.setAttribute('width', `${width}`);
-      svgClone.setAttribute('height', `${height}`);
-      
-      const svgXml = new XMLSerializer().serializeToString(svgClone);
-      const svgDataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgXml)))}`;
-      
-      const img = new Image();
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => {
-            ctx.clearRect(0, 0, width, height);
-            ctx.drawImage(img, 0, 0, width, height);
-            const data = ctx.getImageData(0, 0, width, height).data;
-            let palette, indexed;
-            if (firstFrame) {
-                palette = gifenc.quantize(data, 256, { format: 'rgba4444' });
-                indexed = gifenc.applyPalette(data, palette, 'rgba4444');
-                firstFrame = false;
-            } else {
-                palette = gifenc.quantize(data, 256, { format: 'rgba4444' });
-                indexed = gifenc.applyPalette(data, palette, 'rgba4444');
+    const frameDelay = 1000 / FPS;
+    const frameBuffers: ArrayBuffer[] = [];
+    const delays: number[] = [];
+    const LOOP_DURATION = 1000;
+
+    for (let time = 0; time < totalDuration; time += frameDelay) {
+        let startPose, endPose, segmentStartTime, segmentDuration;
+        
+        let segmentFound = false;
+        for (let i = 0; i < keyframes.length - 1; i++) {
+            if (time >= keyframes[i].time && time < keyframes[i+1].time) {
+                startPose = keyframes[i].pose; endPose = keyframes[i+1].pose;
+                segmentStartTime = keyframes[i].time; segmentDuration = keyframes[i+1].time - keyframes[i].time;
+                segmentFound = true; break;
             }
-            gif.writeFrame(indexed, width, height, { palette, delay });
-            resolve();
-        };
-        img.onerror = reject;
-        img.src = svgDataUrl;
-      });
+        }
+        if (!segmentFound) {
+            const lastKeyframe = keyframes[keyframes.length - 1];
+            startPose = lastKeyframe.pose; endPose = keyframes[0].pose;
+            segmentStartTime = lastKeyframe.time; segmentDuration = LOOP_DURATION;
+        }
+        
+        const timeIntoSegment = time - segmentStartTime;
+        const progress = segmentDuration > 0 ? timeIntoSegment / segmentDuration : 1;
+        const currentPose = { ...startPose } as WalkingEnginePivotOffsets;
+        JOINT_KEYS.forEach(k => {
+            currentPose[k] = lerpAngleShortestPath(startPose[k], endPose[k], progress);
+        });
   
-      captureFrame(time + delay);
-    };
+        setExportRenderPose(currentPose);
+        setApngExportProgress((time / totalDuration) * 100);
   
-    captureFrame(0);
+        await new Promise(resolve => requestAnimationFrame(resolve));
+  
+        const svgClone = svgElement.cloneNode(true) as SVGSVGElement;
+        if (!exportShowAnchors) svgClone.querySelectorAll('[data-no-export="true"]').forEach(el => el.remove());
+        if (!exportTransparentBg) {
+          const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          bgRect.setAttribute('width', '100%'); bgRect.setAttribute('height', '100%'); bgRect.setAttribute('fill', '#FFFFFF');
+          bgRect.setAttribute('x', svgClone.viewBox.baseVal.x.toString());
+          bgRect.setAttribute('y', svgClone.viewBox.baseVal.y.toString());
+          svgClone.insertBefore(bgRect, svgClone.firstChild);
+        }
+        svgClone.setAttribute('width', `${width}`);
+        svgClone.setAttribute('height', `${height}`);
+        
+        const svgXml = new XMLSerializer().serializeToString(svgClone);
+        const svgDataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgXml)))}`;
+        
+        const img = new Image();
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => {
+              ctx.clearRect(0, 0, width, height);
+              ctx.drawImage(img, 0, 0, width, height);
+              const imageData = ctx.getImageData(0, 0, width, height);
+              frameBuffers.push(imageData.data.buffer);
+              delays.push(frameDelay);
+              resolve();
+          };
+          img.onerror = reject;
+          img.src = svgDataUrl;
+        });
+    }
+  
+    addLog("APNG EXPORT: Encoding frames...");
+    const apngBuffer = UPNG.encode(frameBuffers, width, height, 0, delays);
+    
+    const blob = new Blob([apngBuffer], { type: 'image/png' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `bitruvian_anim_${Date.now()}.png`;
+    link.click();
+    URL.revokeObjectURL(url);
+    
+    addLog("APNG EXPORT: Finished and downloaded.");
+    setExportRenderPose(null);
+    setIsExportingApng(false);
   
   }, [keyframes, totalDuration, exportShowAnchors, exportTransparentBg, addLog]);
-
+  
   const handleAddKeyframe = useCallback(() => {
     if (isAnimating || isTransitioning) return;
     const currentPose = { ...pivotOffsets };
@@ -375,12 +387,36 @@ export const App: React.FC = () => {
       id: `kf-${Date.now()}`,
       pose: currentPose,
       time: newTime,
+      easing: 'linear',
     };
     setKeyframes(prev => [...prev, newKeyframe]);
     addLog(`ANIM: Keyframe ${keyframes.length + 1} added.`);
     recordSnapshot(`ADD_KEYFRAME_${keyframes.length + 1}`);
     setSelectedKeyframeIndex(keyframes.length);
   }, [pivotOffsets, keyframes, isAnimating, isTransitioning, addLog]);
+
+  const handleUpdateKeyframePose = useCallback((index: number) => {
+    if (isAnimating || isTransitioning) return;
+    setKeyframes(currentKeyframes => {
+        const newKeyframes = [...currentKeyframes];
+        if (newKeyframes[index]) {
+            newKeyframes[index].pose = { ...pivotOffsets };
+            addLog(`ANIM: Keyframe ${index + 1} pose updated.`);
+        }
+        return newKeyframes;
+    });
+  }, [pivotOffsets, isAnimating, isTransitioning, addLog]);
+
+  const handleRemoveKeyframe = useCallback((index: number) => {
+      if (isAnimating || isTransitioning) return;
+      setKeyframes(currentKeyframes => {
+          const newKeyframes = currentKeyframes.filter((_, i) => i !== index);
+          addLog(`ANIM: Keyframe ${index + 1} removed.`);
+          return newKeyframes;
+      });
+      setSelectedKeyframeIndex(null);
+  }, [isAnimating, isTransitioning, addLog]);
+
 
   const handleFullAnimationReset = useCallback(() => {
       resetAnimationEngine();
@@ -465,6 +501,17 @@ export const App: React.FC = () => {
       const newKeyframes = [...currentKeyframes];
       if (newKeyframes[index]) {
         newKeyframes[index].time = newTime;
+      }
+      // Re-sort in case dragging changed order, though constraints should prevent this.
+      return newKeyframes.sort((a, b) => a.time - b.time);
+    });
+  }, []);
+
+  const handleUpdateKeyframeEasing = useCallback((index: number, easing: EasingType) => {
+    setKeyframes(currentKeyframes => {
+      const newKeyframes = [...currentKeyframes];
+      if (newKeyframes[index]) {
+        newKeyframes[index].easing = easing;
       }
       return newKeyframes;
     });
@@ -746,6 +793,20 @@ useEffect(() => {
   const blendModeOptions = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity'];
   const ghostType = useMemo(() => { if (isTransitioning) return 'static'; if (previewPivotOffsets) return 'fk'; return null; }, [isTransitioning, previewPivotOffsets]);
   
+  const handlePreviewMotion = useCallback(() => {
+    if (isAnimating || isTransitioning || isPreviewingMotion) return;
+    const originalPose = { ...pivotOffsets };
+    setIsPreviewingMotion(true);
+    addLog(`PERF: Previewing ${motionStyle} motion style.`);
+    animatePoseTransition(T_POSE, 1000, () => {
+      setTimeout(() => {
+        animatePoseTransition(originalPose, 1000, () => {
+          setIsPreviewingMotion(false);
+        });
+      }, 200);
+    });
+  }, [pivotOffsets, isAnimating, isTransitioning, isPreviewingMotion, animatePoseTransition, motionStyle, addLog]);
+
   useEffect(() => { const newVels = { ...jointVelocitiesRef.current }; const finalPivotOffsets = previewPivotOffsets || pivotOffsets; JOINT_KEYS.forEach(key => { const delta = lerpAngleShortestPath(prevPivotOffsetsForVelRef.current[key], finalPivotOffsets[key], 1) - prevPivotOffsetsForVelRef.current[key]; newVels[key] = (newVels[key] * 0.2) + (delta * 0.8); }); jointVelocitiesRef.current = newVels; prevPivotOffsetsForVelRef.current = finalPivotOffsets; }, [previewPivotOffsets, pivotOffsets]);
   useEffect(() => { let animationFrameId: number; let lastFrameTime = performance.now(); const frameInterval = targetFps ? 1000 / targetFps : 0; const updateDisplayLoop = (currentTime: number) => { if (currentTime - lastFrameTime >= frameInterval) { lastFrameTime = currentTime - ((currentTime - lastFrameTime) % frameInterval); const poseForVelocityCalc = previewPivotOffsets || pivotOffsets; latestPivotOffsetsRef.current = poseForVelocityCalc; let poseToDisplay = { ...poseForVelocityCalc }; if (motionStyle === 'lotte') { const newVels = { ...jointVelocitiesRef.current }; const tailLengthDecayFactor = 1 - ((100 - jointFriction) / 100 * 0.2); JOINT_KEYS.forEach(key => { let totalNeighborVelocity = 0; const neighbors: (keyof WalkingEnginePivotOffsets)[] = []; const parent = JOINT_PARENT_MAP[key]; if (parent) neighbors.push(parent); if (key === 'collar') { neighbors.push('neck', 'l_shoulder', 'r_shoulder'); } else if (key === 'waist') { neighbors.push('torso', 'l_hip', 'r_hip'); } else if (JOINT_CHILD_MAP[key]) { neighbors.push(JOINT_CHILD_MAP[key]!); } neighbors.forEach(nKey => { totalNeighborVelocity += Math.abs(newVels[nKey]); }); const featherAmount = 0.5; if (totalNeighborVelocity > 0.2) { const rand = Math.random() - 0.5; const scaledFeather = Math.min(featherAmount, totalNeighborVelocity * 0.05) * rand; poseToDisplay[key] += scaledFeather; } newVels[key] *= tailLengthDecayFactor; if (Math.abs(newVels[key]) < 0.01) newVels[key] = 0; }); jointVelocitiesRef.current = newVels; } setDisplayedPivotOffsets(poseToDisplay); } animationFrameId = requestAnimationFrame(updateDisplayLoop); }; animationFrameId = requestAnimationFrame(updateDisplayLoop); return () => cancelAnimationFrame(animationFrameId); }, [targetFps, motionStyle, jointFriction, previewPivotOffsets, pivotOffsets]);
   const activeSelectionKeys = useMemo(() => { const selection = new Set<keyof WalkingEnginePivotOffsets>(); if (!selectedBoneKey) return selection; switch (selectionScope) { case 'part': selection.add(selectedBoneKey); break; case 'hierarchy': { selection.add(selectedBoneKey); let current = selectedBoneKey; while (JOINT_CHILD_MAP[current]) { const child = JOINT_CHILD_MAP[current]!; selection.add(child); current = child; } break; } case 'full': JOINT_KEYS.forEach(k => selection.add(k)); break; } return selection; }, [selectedBoneKey, selectionScope]);
@@ -753,7 +814,7 @@ useEffect(() => {
   const rotationControlLabel = primaryPin === 'waist' ? 'Body Rotation' : `Rotation @ ${primaryPin.replace(/_/g, ' ')}`;
   const frictionLabel = motionStyle === 'clockwork' ? 'Tick Rate' : motionStyle === 'lotte' ? 'Tail Length' : 'Joint Friction';
   const mannequinOffsets = useMemo(() => { if (isCalibrating) return pivotOffsets; if (motionStyle === 'lotte') return displayedPivotOffsets; if (predictiveGhostingEnabled && previewPivotOffsets) { return pivotOffsets; } return previewPivotOffsets || pivotOffsets; }, [isCalibrating, motionStyle, displayedPivotOffsets, pivotOffsets, previewPivotOffsets, predictiveGhostingEnabled]);
-  const mannequinRenderPose = gifRenderPose || mannequinOffsets;
+  const mannequinRenderPose = exportRenderPose || mannequinOffsets;
 
   return (
     <div className="flex h-full w-full bg-paper font-mono text-ink overflow-hidden select-none">
@@ -833,9 +894,16 @@ useEffect(() => {
                 </div>
               </div>
             )}
-            {activeControlTab === 'perf' && ( <div className="flex flex-col gap-4 pt-4 animate-in fade-in slide-in-from-right duration-200"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Environment</div> <div className="flex flex-col gap-2 p-2 border border-ridge/50 rounded bg-white/30"> <button onClick={() => setHardStopEnabled(p => !p)} className={`text-sm px-3 py-1 border transition-all ${hardStopEnabled ? 'bg-accent-red text-paper border-accent-red' : 'bg-paper/10 text-mono-mid border-ridge'}`} > HARD STOP: {hardStopEnabled ? 'ON' : 'OFF'} </button> <p className="text-[10px] text-mono-light italic text-center pt-1">When ON, prevents pins stretching beyond 20px.</p> </div> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Intent Preview</div> <div className="flex flex-col gap-2 p-2 border border-ridge/50 rounded bg-white/30"> <button onClick={() => { saveToHistory(); recordSnapshot(showIntentPath ? 'INTENT_PATH_OFF' : 'INTENT_PATH_ON'); setShowIntentPath(prev => !prev); }} className={`text-sm px-3 py-1 border transition-all ${showIntentPath ? 'bg-accent-green text-paper border-accent-green' : 'bg-paper/10 text-mono-mid border-ridge'}`} disabled={isTransitioning}> PREVIEW DEPTH: {showIntentPath ? '5 FRAMES' : 'OFF'} </button> </div> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Motion Style</div> <div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"> <div className="grid grid-cols-3 gap-1"> {(['standard', 'clockwork', 'lotte'] as MotionStyle[]).map(style => ( <button key={style} onClick={() => { setMotionStyle(style); if(style !== 'standard') setTargetFps(12); else setTargetFps(null); }} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${motionStyle === style ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}> {style} </button> ))} </div> </div> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Rendering FPS</div> <div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"> <div className="grid grid-cols-3 gap-1"> <button onClick={() => setTargetFps(null)} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${!targetFps ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}>Max</button> <button onClick={() => setTargetFps(24)} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${targetFps === 24 ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}>24</button> <button onClick={() => setTargetFps(12)} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${targetFps === 12 ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}>12</button> </div> </div> </div> )}
+            {activeControlTab === 'perf' && ( <div className="flex flex-col gap-4 pt-4 animate-in fade-in slide-in-from-right duration-200"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Environment</div> <div className="flex flex-col gap-2 p-2 border border-ridge/50 rounded bg-white/30"> <button onClick={() => setHardStopEnabled(p => !p)} className={`text-sm px-3 py-1 border transition-all ${hardStopEnabled ? 'bg-accent-red text-paper border-accent-red' : 'bg-paper/10 text-mono-mid border-ridge'}`} > HARD STOP: {hardStopEnabled ? 'ON' : 'OFF'} </button> <p className="text-[10px] text-mono-light italic text-center pt-1">When ON, prevents pins stretching beyond 20px.</p> </div> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Intent Preview</div> <div className="flex flex-col gap-2 p-2 border border-ridge/50 rounded bg-white/30"> <button onClick={() => { saveToHistory(); recordSnapshot(showIntentPath ? 'INTENT_PATH_OFF' : 'INTENT_PATH_ON'); setShowIntentPath(prev => !prev); }} className={`text-sm px-3 py-1 border transition-all ${showIntentPath ? 'bg-accent-green text-paper border-accent-green' : 'bg-paper/10 text-mono-mid border-ridge'}`} disabled={isTransitioning}> PREVIEW DEPTH: {showIntentPath ? '5 FRAMES' : 'OFF'} </button> </div> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Motion Style</div> <div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"> <div className="grid grid-cols-3 gap-1"> {(['standard', 'clockwork', 'lotte'] as MotionStyle[]).map(style => ( <button key={style} onClick={() => { setMotionStyle(style); if(style !== 'standard') setTargetFps(12); else setTargetFps(null); }} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${motionStyle === style ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}> {style} </button> ))} </div><button onClick={handlePreviewMotion} disabled={isAnimating || isTransitioning || isPreviewingMotion} className="text-sm w-full mt-2 px-3 py-2 border border-selection bg-selection text-paper font-bold hover:bg-selection-light transition-all uppercase tracking-widest text-center disabled:opacity-50"> PREVIEW MOTION STYLE </button></div> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Rendering FPS</div> <div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"> <div className="grid grid-cols-3 gap-1"> <button onClick={() => setTargetFps(null)} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${!targetFps ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}>Max</button> <button onClick={() => setTargetFps(24)} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${targetFps === 24 ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}>24</button> <button onClick={() => setTargetFps(12)} className={`text-xs px-2 py-1 border uppercase font-bold transition-all ${targetFps === 12 ? 'bg-selection text-paper border-selection' : 'bg-paper/10 text-mono-mid border-ridge'}`}>12</button> </div> </div> </div> )}
             {activeControlTab === 'props' && ( <div className="flex flex-col gap-4 animate-in fade-in slide-in-from-right duration-200"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 flex justify-between items-center"> <span>Anatomical Resizing</span> <button onClick={resetProps} disabled={isAnimating || isTransitioning} className="text-xs text-selection hover:underline disabled:opacity-50">RESET</button> </div> <div className="flex flex-col gap-4 pr-2 h-[400px] overflow-y-auto custom-scrollbar"> {PROP_KEYS.map(k => ( <div key={k} className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"> <div className="text-sm font-bold uppercase text-ink">{k.replace(/_/g, ' ')}</div> <div className="space-y-1"> <div className="flex justify-between text-xs uppercase text-mono-light"><span>Height Scale</span><span>{props[k].h.toFixed(2)}x</span></div> <input type="range" min="0.2" max="3" step="0.01" value={props[k].h} disabled={isAnimating || isTransitioning} onMouseDown={() => {saveToHistory(); recordSnapshot(`START_PROP_H_${k}`);}} onChange={e => updateProp(k, 'h', parseFloat(e.target.value))} onMouseUp={() => recordSnapshot(`END_PROP_H_${k}`)} className="w-full h-1 accent-mono-mid disabled:opacity-50" /> </div> <div className="space-y-1"> <div className="flex justify-between text-xs uppercase text-mono-light"><span>Width Scale</span><span>{props[k].w.toFixed(2)}x</span></div> <input type="range" min="0.2" max="3" step="0.01" value={props[k].w} disabled={isAnimating || isTransitioning} onMouseDown={() => {saveToHistory(); recordSnapshot(`START_PROP_W_${k}`);}} onChange={e => updateProp(k, 'w', parseFloat(e.target.value))} onMouseUp={() => recordSnapshot(`END_PROP_W_${k}`)} className="w-full h-1 accent-mono-mid disabled:opacity-50" /> </div> </div> ))} </div> </div> )}
-            {activeControlTab === 'animation' && ( <div className="flex flex-col gap-4 animate-in fade-in duration-200"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Animation Timeline</div> <Timeline keyframes={keyframes} onPlay={handlePlay} onPause={handlePause} onReset={handleFullAnimationReset} isAnimating={isAnimating} animationTime={animationTime} totalDuration={totalDuration} onAddKeyframe={handleAddKeyframe} onSelectKeyframe={handleSelectKeyframe} selectedKeyframeIndex={selectedKeyframeIndex} onScrub={handleScrub} onUpdateKeyframeTime={handleUpdateKeyframeTime} onAddTweenFrame={handleAddTweenFrame} /> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 mt-2">Onion Skinning</div><div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"><button onClick={() => setShowOnionSkins(p => !p)} className={`w-full text-sm px-3 py-1 border transition-all ${showOnionSkins ? 'bg-accent-green text-paper border-accent-green' : 'bg-paper/10 text-mono-mid border-ridge'}`}> ONION SKINS: {showOnionSkins ? 'ON' : 'OFF'} </button><div className="grid grid-cols-2 gap-4 pt-1"><div className="flex flex-col gap-1"><label className="text-xs uppercase font-bold text-mono-light">Before</label><input type="number" min="0" max="5" value={onionSkinFrames.before} onChange={e => setOnionSkinFrames(f => ({...f, before: parseInt(e.target.value) || 0}))} className="w-full bg-paper/50 border border-ridge/50 p-1 text-center rounded-sm" /></div><div className="flex flex-col gap-1"><label className="text-xs uppercase font-bold text-mono-light">After</label><input type="number" min="0" max="5" value={onionSkinFrames.after} onChange={e => setOnionSkinFrames(f => ({...f, after: parseInt(e.target.value) || 0}))} className="w-full bg-paper/50 border border-ridge/50 p-1 text-center rounded-sm" /></div></div> {isCapsLockOn && <div className="text-center text-accent-orange font-bold text-xs pt-1 animate-pulse tracking-widest">POSE-SELECT ACTIVE</div>}</div><div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 mt-2">Export</div><div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-3"><div className="flex items-center justify-between"><label htmlFor="transparent-bg" className="text-sm text-ink">Transparent Background</label><button id="transparent-bg" onClick={() => setExportTransparentBg(p => !p)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${exportTransparentBg ? 'bg-accent-green' : 'bg-gray-200'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${exportTransparentBg ? 'translate-x-6' : 'translate-x-1'}`}/></button></div><div className="flex items-center justify-between"><label htmlFor="show-anchors" className="text-sm text-ink">Show Anchors</label><button id="show-anchors" onClick={() => setExportShowAnchors(p => !p)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${exportShowAnchors ? 'bg-accent-green' : 'bg-gray-200'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${exportShowAnchors ? 'translate-x-6' : 'translate-x-1'}`}/></button></div><div className="grid grid-cols-2 gap-2"> <button onClick={handleExportPNG} disabled={isExportingGif} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors disabled:opacity-50">EXPORT PNG</button> <button onClick={handleExportGIF} disabled={isExportingGif || keyframes.length < 2} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors disabled:opacity-50">EXPORT GIF</button> </div> {isExportingGif && (<div className="space-y-1"><div className="text-xs text-center text-ink">Generating GIF... ({gifExportProgress.toFixed(0)}%)</div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-accent-green h-1.5 rounded-full" style={{width: `${gifExportProgress}%`}}></div></div></div>)}</div></div> )}
+            {activeControlTab === 'animation' && ( <div className="flex flex-col gap-4 animate-in fade-in duration-200"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Animation Timeline</div> <Timeline keyframes={keyframes} onPlay={handlePlay} onPause={handlePause} onReset={handleFullAnimationReset} isAnimating={isAnimating} animationTime={animationTime} totalDuration={totalDuration} onAddKeyframe={handleAddKeyframe} onSelectKeyframe={handleSelectKeyframe} selectedKeyframeIndex={selectedKeyframeIndex} onScrub={handleScrub} onUpdateKeyframeTime={handleUpdateKeyframeTime} onAddTweenFrame={handleAddTweenFrame} onUpdateKeyframeEasing={handleUpdateKeyframeEasing} onUpdateKeyframePose={handleUpdateKeyframePose} onRemoveKeyframe={handleRemoveKeyframe} /> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 mt-2">Onion Skinning</div><div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-2"><button onClick={() => setShowOnionSkins(p => !p)} className={`w-full text-sm px-3 py-1 border transition-all ${showOnionSkins ? 'bg-accent-green text-paper border-accent-green' : 'bg-paper/10 text-mono-mid border-ridge'}`}> ONION SKINS: {showOnionSkins ? 'ON' : 'OFF'} </button><div className="grid grid-cols-2 gap-4 pt-1"><div className="flex flex-col gap-1"><label className="text-xs uppercase font-bold text-mono-light">Before</label><input type="number" min="0" max="5" value={onionSkinFrames.before} onChange={e => setOnionSkinFrames(f => ({...f, before: parseInt(e.target.value) || 0}))} className="w-full bg-paper/50 border border-ridge/50 p-1 text-center rounded-sm" /></div><div className="flex flex-col gap-1"><label className="text-xs uppercase font-bold text-mono-light">After</label><input type="number" min="0" max="5" value={onionSkinFrames.after} onChange={e => setOnionSkinFrames(f => ({...f, after: parseInt(e.target.value) || 0}))} className="w-full bg-paper/50 border border-ridge/50 p-1 text-center rounded-sm" /></div></div> {isCapsLockOn && <div className="text-center text-accent-orange font-bold text-xs pt-1 animate-pulse tracking-widest">POSE-SELECT ACTIVE</div>}</div>
+            <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 mt-2">View Mode</div>
+            <div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-3">
+              <button onClick={() => setIsSheetView(p => !p)} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors">
+                {isSheetView ? 'RETURN TO POSER' : 'GENERATE CHARACTER SHEET'}
+              </button>
+            </div>
+            <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1 mt-2">Export</div><div className="p-2 border border-ridge/50 rounded bg-white/30 space-y-3"><div className="flex items-center justify-between"><label htmlFor="transparent-bg" className="text-sm text-ink">Transparent Background</label><button id="transparent-bg" onClick={() => setExportTransparentBg(p => !p)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${exportTransparentBg ? 'bg-accent-green' : 'bg-gray-200'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${exportTransparentBg ? 'translate-x-6' : 'translate-x-1'}`}/></button></div><div className="flex items-center justify-between"><label htmlFor="show-anchors" className="text-sm text-ink">Show Anchors</label><button id="show-anchors" onClick={() => setExportShowAnchors(p => !p)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${exportShowAnchors ? 'bg-accent-green' : 'bg-gray-200'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${exportShowAnchors ? 'translate-x-6' : 'translate-x-1'}`}/></button></div><div className="grid grid-cols-2 gap-2"> <button onClick={handleExportPNG} disabled={isExportingApng} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors disabled:opacity-50">EXPORT PNG</button> <button onClick={handleExportAPNG} disabled={isExportingApng || keyframes.length < 2} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors disabled:opacity-50">EXPORT APNG</button> </div> {isExportingApng && (<div className="space-y-1"><div className="text-xs text-center text-ink">Generating APNG... ({apngExportProgress.toFixed(0)}%)</div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-accent-green h-1.5 rounded-full" style={{width: `${apngExportProgress}%`}}></div></div></div>)}</div></div> )}
           </div>
           <div className="flex flex-col gap-4 pt-4 border-t border-ridge"> <div className="text-xs font-bold text-mono-light uppercase border-b border-ridge pb-1">Serialization</div> <textarea readOnly value={poseString} className="w-full text-sm bg-white border border-ridge p-2 font-mono custom-scrollbar resize-none h-24" /> <div className="flex flex-col gap-2"> <button onClick={copyToClipboard} className="w-full text-sm px-3 py-2 border border-ridge font-bold bg-selection text-paper hover:bg-selection-light transition-colors">COPY STATE STRING</button> <button onClick={saveToFile} className="w-full text-sm px-3 py-2 border border-ridge font-bold text-mono-mid hover:bg-mono-dark transition-colors">EXPORT FILE</button> </div> </div>
           <SystemLogger logs={recordingHistory} isVisible={true} onExportJSON={exportRecordingJSON} onClearHistory={clearHistory} historyCount={recordingHistory.length} onLogMouseEnter={setOnionSkinData} onLogMouseLeave={() => setOnionSkinData(null)} onLogClick={handleLogClick} selectedLogIndex={selectedLogIndex} />
@@ -844,38 +912,71 @@ useEffect(() => {
         </div>
       )}
       {isKeymapVisible && <KeymapHelper onClose={() => setIsKeymapVisible(false)} />}
-      <div className={`flex-1 relative flex items-center justify-center bg-paper p-8 overflow-hidden transition-all duration-500 ${isAnimating ? 'cursor-wait' : (!isCalibrated && !isCalibrating ? 'cursor-pointer group/stage' : '')}`} onClick={() => !isCalibrated && !isCalibrating && startCalibration()}>
+      <div className={`flex-1 relative flex items-center justify-center bg-paper p-8 overflow-hidden transition-all duration-500 ${isAnimating ? 'cursor-wait' : (!isCalibrated && !isCalibrating && !isSheetView ? 'cursor-pointer group/stage' : '')}`} onClick={() => !isCalibrated && !isCalibrating && !isSheetView && startCalibration()}>
         {isAnimating && <div className="absolute top-4 right-4 z-50 px-3 py-1 bg-selection text-paper text-sm font-bold tracking-[0.2em] animate-pulse rounded-sm border border-ridge/50">ANIMATING...</div>}
         {isTransitioning && <div className="absolute top-4 right-4 z-50 px-3 py-1 bg-accent-purple text-paper text-sm font-bold tracking-[0.2em] animate-pulse rounded-sm border border-ridge/50">TRANSITIONING...</div>}
         <button onClick={(e) => { e.stopPropagation(); setIsConsoleVisible(!isConsoleVisible); }} disabled={!isCalibrated} className={`absolute top-4 left-4 z-50 p-2 rounded-full transition-all shadow-sm border ${!isCalibrated ? 'bg-mono-dark text-mono-light opacity-30 cursor-not-allowed border-ridge' : 'bg-mono-darker/50 text-ink hover:bg-selection-super-light border-ridge'}`}> <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isConsoleVisible ? "M6 18L18 6M6 6l12 12" : "M4 6h16M4 12h16M4 18h16"} /></svg> </button>
         {!isCalibrated && !isCalibrating && ( <div className="absolute inset-0 z-[100] flex flex-col items-center justify-end pb-16 md:pb-24 px-4 bg-paper/5 pointer-events-none animate-in fade-in duration-700"><h2 className="text-6xl md:text-8xl font-archaic text-ink tracking-tighter leading-none uppercase text-center animate-in slide-in-from-bottom-8 duration-1000">Bitruvian Posing Engine</h2></div>)}
-        <svg ref={svgRef} viewBox="-500 -700 1000 1400" className={`w-full h-full drop-shadow-xl overflow-visible relative z-0 transition-all duration-300 ${!isCalibrated ? 'scale-110' : ''}`}>
+        <svg ref={svgRef} viewBox={isSheetView ? "-800 -600 1600 1200" : "-500 -700 1000 1400"} className={`w-full h-full drop-shadow-xl overflow-visible relative z-0 transition-all duration-300 ${!isCalibrated ? 'scale-110' : ''}`}>
           {backgroundImage && (<image id="background-image-renderer" href={backgroundImage} x="-500" y="-500" width="1000" height="1000" preserveAspectRatio="xMidYMid slice" transform={`translate(${backgroundTransform.x}, ${backgroundTransform.y}) rotate(${backgroundTransform.rotation}) scale(${backgroundTransform.scale})`} className="pointer-events-none" /> )}
-          <g transform={`translate(${physicsState.position.x}, ${physicsState.position.y})`} className="relative z-10">
-              <g transform={`rotate(${bodyRotation}, ${pinnedJointPosition.x}, ${pinnedJointPosition.y})`} className={backgroundImage ? `mix-blend-${blendMode}` : ''}>
-                 {!isExportingGif && onionSkinPoses.map((skin, i) => (
-                    <Mannequin 
-                        key={`onion-${skin.index}-${i}`}
-                        pose={RESTING_BASE_POSE}
-                        pivotOffsets={skin.pose}
-                        props={props}
-                        isGhost={true}
-                        ghostType={'static'}
-                        ghostOpacity={skin.opacity}
-                        showPivots={false} showLabels={false} baseUnitH={baseH}
-                        onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}}
-                        draggingBoneKey={null} selectedBoneKeys={new Set()}
-                        isPaused={true} activePins={[]} limbTensions={{}}
-                        isInteractive={isCapsLockOn}
-                        onClick={() => handleSelectKeyframe(skin.index)}
+          
+          {isSheetView ? (
+            <g>
+              <text x="0" y="50" fontFamily="VT323, monospace" fontSize="120" textAnchor="middle" fill="#111827" opacity="0.6">
+                Bitruvius
+              </text>
+              {RENDER_ORDER.map(partKey => {
+                const p_def = partDefinitions[partKey];
+                const layout = SHEET_LAYOUT[partKey as keyof typeof SHEET_LAYOUT];
+                if (!p_def || !layout) return null;
+
+                const length = getKinematicDimension(p_def.rawH, baseH, props, partKey, 'h');
+                const width = getKinematicDimension(p_def.rawW, baseH, props, partKey, 'w');
+                let colorClass = partKey === 'collar' ? 'fill-olive' : 'fill-black';
+
+                return (
+                  <g key={`sheet-${partKey}`} transform={`translate(${layout.x}, ${layout.y}) rotate(${layout.rotation})`}>
+                    <Bone
+                      rotation={0}
+                      length={length}
+                      width={width}
+                      variant={p_def.variant}
+                      drawsUpwards={p_def.drawsUpwards}
+                      showPivots={false}
+                      visible={true}
+                      colorClass={colorClass}
                     />
-                 ))}
-                 {!isExportingGif && staticGhostPose && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={staticGhostPose} props={props} isGhost={true} ghostType={'static'} ghostOpacity={0.4} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> )}
-                 {!isExportingGif && predictiveGhostingEnabled && ghostType === 'fk' && previewPivotOffsets && ( <> {showIntentPath && staticGhostPose && draggingBoneKeyRef.current && Array.from({ length: 5 }).map((_, i) => { const t = (i + 1) / 5; const draggedKey = draggingBoneKeyRef.current!; const startValue = staticGhostPose[draggedKey]!; const endValue = previewPivotOffsets[draggedKey]!; const interpolatedValue = lerpAngleShortestPath(startValue, endValue, t); const delta = interpolatedValue - startValue; const basePoseForStep = { ...staticGhostPose, [draggedKey]: interpolatedValue }; const finalInterpolatedOffsets = applyChainReaction(draggedKey, delta, basePoseForStep); const opacity = 0.1 + t * 0.5; return ( <Mannequin key={`ghost-path-${i}`} pose={RESTING_BASE_POSE} pivotOffsets={finalInterpolatedOffsets} props={props} isGhost={true} ghostType={'fk'} ghostOpacity={opacity} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> ); })} {!showIntentPath && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={previewPivotOffsets} props={props} isGhost={true} ghostType={'fk'} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> )} </> )}
-                 {!isExportingGif && onionSkinData && !previewPivotOffsets && !showOnionSkins && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={onionSkinData.pivotOffsets} props={onionSkinData.props} isGhost={true} ghostType={'static'} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} /> )}
-                <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={mannequinRenderPose} props={props} showPivots={isCalibrated && !isExportingGif} showLabels={showLabels} baseUnitH={baseH} onAnchorMouseDown={onAnchorMouseDown} onBodyMouseDown={handleBodyMouseDown} draggingBoneKey={draggingBoneKey} selectedBoneKeys={activeSelectionKeys} isPaused={true} maskImage={maskImage} maskTransform={maskTransform} onPositionsUpdate={setAllJointPositions} activePins={activePins} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} />
-              </g>
-          </g>
+                  </g>
+                )
+              })}
+            </g>
+          ) : (
+            <g transform={`translate(${physicsState.position.x}, ${physicsState.position.y})`} className="relative z-10">
+                <g transform={`rotate(${bodyRotation}, ${pinnedJointPosition.x}, ${pinnedJointPosition.y})`} className={backgroundImage ? `mix-blend-${blendMode}` : ''}>
+                  {isExportingApng ? null : onionSkinPoses.map((skin, i) => (
+                      <Mannequin 
+                          key={`onion-${skin.index}-${i}`}
+                          pose={RESTING_BASE_POSE}
+                          pivotOffsets={skin.pose}
+                          props={props}
+                          isGhost={true}
+                          ghostType={'static'}
+                          ghostOpacity={skin.opacity}
+                          showPivots={false} showLabels={false} baseUnitH={baseH}
+                          onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}}
+                          draggingBoneKey={null} selectedBoneKeys={new Set()}
+                          isPaused={true} activePins={[]} limbTensions={{}}
+                          isInteractive={isCapsLockOn}
+                          onClick={() => handleSelectKeyframe(skin.index)}
+                      />
+                  ))}
+                  {isExportingApng ? null : staticGhostPose && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={staticGhostPose} props={props} isGhost={true} ghostType={'static'} ghostOpacity={0.4} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> )}
+                  {isExportingApng ? null : predictiveGhostingEnabled && ghostType === 'fk' && previewPivotOffsets && ( <> {showIntentPath && staticGhostPose && draggingBoneKeyRef.current && Array.from({ length: 5 }).map((_, i) => { const t = (i + 1) / 5; const draggedKey = draggingBoneKeyRef.current!; const startValue = staticGhostPose[draggedKey]!; const endValue = previewPivotOffsets[draggedKey]!; const interpolatedValue = lerpAngleShortestPath(startValue, endValue, t); const delta = interpolatedValue - startValue; const basePoseForStep = { ...staticGhostPose, [draggedKey]: interpolatedValue }; const finalInterpolatedOffsets = applyChainReaction(draggedKey, delta, basePoseForStep); const opacity = 0.1 + t * 0.5; return ( <Mannequin key={`ghost-path-${i}`} pose={RESTING_BASE_POSE} pivotOffsets={finalInterpolatedOffsets} props={props} isGhost={true} ghostType={'fk'} ghostOpacity={opacity} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> ); })} {!showIntentPath && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={previewPivotOffsets} props={props} isGhost={true} ghostType={'fk'} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} /> )} </> )}
+                  {isExportingApng ? null : onionSkinData && !previewPivotOffsets && !showOnionSkins && ( <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={onionSkinData.pivotOffsets} props={onionSkinData.props} isGhost={true} ghostType={'static'} showPivots={false} showLabels={false} baseUnitH={baseH} onAnchorMouseDown={()=>{}} onBodyMouseDown={()=>{}} draggingBoneKey={null} selectedBoneKeys={new Set()} isPaused={true} activePins={[]} /> )}
+                  <Mannequin pose={RESTING_BASE_POSE} pivotOffsets={mannequinRenderPose} props={props} showPivots={isCalibrated && !isExportingApng} showLabels={showLabels} baseUnitH={baseH} onAnchorMouseDown={onAnchorMouseDown} onBodyMouseDown={handleBodyMouseDown} draggingBoneKey={draggingBoneKey} selectedBoneKeys={activeSelectionKeys} isPaused={true} maskImage={maskImage} maskTransform={maskTransform} onPositionsUpdate={setAllJointPositions} activePins={activePins} limbTensions={limbTensions} pinsAtLimit={pinsAtLimit} />
+                </g>
+            </g>
+          )}
         </svg>
       </div>
     </div>

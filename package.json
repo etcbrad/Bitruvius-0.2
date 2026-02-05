@@ -13,7 +13,7 @@
     "jszip": "3.10.1",
     "file-saver": "2.0.5",
     "react-dom": "18.3.1",
-    "gifenc": "1.0.3"
+    "upng-js": "2.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

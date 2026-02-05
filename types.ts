@@ -174,10 +174,13 @@ export type AnimationClip = {
   pivotEvents?: AnimationPivotEvent[];
 };
 
+export type EasingType = 'linear' | 'ease-out' | 'ease-in-out';
+
 export type Keyframe = {
   id: string;
   pose: WalkingEnginePivotOffsets;
   time: number; // Absolute time in milliseconds
+  easing?: EasingType; // Easing for the transition *from* this keyframe
 };
 
 export type MotionEnginePose = {

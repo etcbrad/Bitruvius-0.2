@@ -3,12 +3,10 @@ import { PartName, Pose, Vector2D, AnchorName, WalkingEngineProportions } from '
 
 export const lerp = (start: number, end: number, t: number): number => start * (1 - t) + end * t;
 
-// Added for smoother, robotic transitions
-export const easeInOutQuint = (t: number): number => {
-  return t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
-};
-
-// Added for physically plausible impact simulation
+// Easing functions for animation
+export const linear = (t: number): number => t;
+export const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3);
+export const easeInOutCubic = (t: number): number => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 export const easeInQuint = (t: number): number => t * t * t * t * t;
 
 
